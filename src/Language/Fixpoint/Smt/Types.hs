@@ -28,15 +28,19 @@ module Language.Fixpoint.Smt.Types (
 
     ) where
 
-import           Control.Concurrent.Async (Async)
-import           Control.Concurrent.STM (TVar)
+-- import           Control.Concurrent.Async (Async)
+-- import           Control.Concurrent.STM (TVar)
 import           Language.Fixpoint.Types
 import           Language.Fixpoint.Utils.Builder (Builder)
+import qualified Data.ByteString.Lazy.Char8 as LBS
+import Data.IORef
 import qualified Data.Text                as T
 import           Text.PrettyPrint.HughesPJ
+import qualified SMTLIB.Backends as Bck
+import qualified SMTLIB.Backends.Process as Process
 
 import           System.IO                (Handle)
-import           System.Process
+-- import           System.Process
 -- import           Language.Fixpoint.Misc   (traceShow)
 
 --------------------------------------------------------------------------------
@@ -95,17 +99,12 @@ data Response     = Ok
 
 -- | Information about the external SMT process
 data Context = Ctx
-  { ctxPid     :: !ProcessHandle
-    -- | The handle for writing queries to, for input to the SMT solver.
-  , ctxIn      :: !Handle
-    -- | The handle for reading responses from, the output from the SMT solver.
-  , ctxOut     :: !Handle
+  { ctxSolver :: Bck.Solver
+  , ctxProcess :: Process.Handle
+  , ctxResp :: IORef LBS.ByteString
   , ctxLog     :: !(Maybe Handle)
   , ctxVerbose :: !Bool
   , ctxSymEnv  :: !SymEnv
-  , ctxAsync   :: Async ()
-    -- | The next batch of queries to send to the SMT solver
-  , ctxTVar    :: TVar Builder
   }
 
 --------------------------------------------------------------------------------
