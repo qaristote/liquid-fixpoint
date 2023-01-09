@@ -220,10 +220,10 @@ smtSetMbqi me = asyncCommand me SetMbqi
 smtWrite :: Context -> Command -> IO ()
 smtWrite me !s = do
   let cmdText = ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 env s))
-  LTIO.putStrLn $ "[send]" <> (case s of
-                                 CheckSat -> " "
-                                 GetValue _ -> " "
-                                 _ -> "[async] ") <> cmdText
+  -- LTIO.putStrLn $ "[send]" <> (case s of
+  --                                CheckSat -> " "
+  --                                GetValue _ -> " "
+  --                                _ -> "[async] ") <> cmdText
   smtWriteRaw me cmdText  $ case s of
     CheckSat -> True
     GetValue _ -> True
@@ -408,11 +408,14 @@ makeContext' cfg ctxLog = do
 -- | Close file handles and wait for the solver process to terminate.
 cleanupContext :: Context -> IO ExitCode
 cleanupContext Ctx{..} = do
+  myLog "cleaning"
   maybe (return ()) (hCloseMe "ctxLog") ctxLog
   -- cancel ctxAsync
-  case ctxHandle of
-    Process h -> Process.wait h
-    Z3lib   h -> Z3.close     h >> return ExitSuccess
+  res <- (case ctxHandle of
+    Process h -> Process.close h
+    Z3lib   h -> Z3.close      h) >> return ExitSuccess
+  myLog "cleaned!"
+  return res
 
 hCloseMe :: String -> Handle -> IO ()
 hCloseMe msg h = hClose h `catch` (\(exn :: IOException) -> putStrLn $ "OOPS, hClose breaks: " ++ msg ++ show exn)
