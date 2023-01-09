@@ -128,7 +128,7 @@ library
                   , base                 >= 4.9.1.0 && < 5
                   , binary
                   , boxes
-                  , bytestring
+                  , bytestring >= 0.11.2
                   , cereal
                   , cmdargs
                   , containers
@@ -149,6 +149,7 @@ library
                   , rest-rewrite >= 0.3.0
                   , smtlib-backends
                   , smtlib-backends-process
+                  , smtlib-backends-z3
                   , stm
                   , store
                   , vector < 0.13

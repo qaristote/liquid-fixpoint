@@ -25,6 +25,7 @@ module Language.Fixpoint.Smt.Types (
 
     -- * SMTLIB2 Process Context
     , Context (..)
+    , ContextHandle (..)
 
     ) where
 
@@ -38,6 +39,7 @@ import qualified Data.Text                as T
 import           Text.PrettyPrint.HughesPJ
 import qualified SMTLIB.Backends as Bck
 import qualified SMTLIB.Backends.Process as Process
+import qualified SMTLIB.Backends.Z3 as Z3
 
 import           System.IO                (Handle)
 -- import           System.Process
@@ -97,10 +99,12 @@ data Response     = Ok
                   | Error !T.Text
                   deriving (Eq, Show)
 
+data ContextHandle = Process Process.Handle | Z3lib Z3.Handle
+
 -- | Information about the external SMT process
 data Context = Ctx
   { ctxSolver :: Bck.Solver
-  , ctxProcess :: Process.Handle
+  , ctxHandle :: ContextHandle
   , ctxResp :: IORef LBS.ByteString
   , ctxLog     :: !(Maybe Handle)
   , ctxVerbose :: !Bool

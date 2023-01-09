@@ -4,6 +4,7 @@ let
   settings = { ... }: {
     haskell = {
       enable = true;
+      haskellPackages = pkgs.haskell.packages.ghc810;
       cabal.enable = true;
       packages = hp: with hp; [ haskell-language-server ];
     };

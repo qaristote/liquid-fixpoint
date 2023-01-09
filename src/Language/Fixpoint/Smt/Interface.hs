@@ -118,9 +118,10 @@ import qualified Data.Text.Encoding                as TE
 -- import qualified Data.Text.IO             as TIO
 import qualified Data.Text.Lazy           as LT
 import qualified Data.Text.Lazy.Encoding as LTE
-import qualified Data.Text.Lazy.IO        as LTIO
+import qualified Data.Text.Lazy.IO as LTIO
 import qualified SMTLIB.Backends as Bck
 import qualified SMTLIB.Backends.Process as Process
+import qualified SMTLIB.Backends.Z3 as Z3
 import           System.Directory
 import           System.Console.CmdArgs.Verbosity
 import           System.Exit              hiding (die)
@@ -154,8 +155,8 @@ runCommands cmds
 
 myLog :: LBS.ByteString -> IO ()
 myLog b =
-  -- return ()
-  LBS.putStrLn b
+  return ()
+  -- LBS.putStrLn b
 
 checkValidWithContext :: Context -> [(Symbol, Sort)] -> Expr -> Expr -> IO Bool
 checkValidWithContext me xts p q =
@@ -324,7 +325,7 @@ makeContext cfg f
   = do createDirectoryIfMissing True $ takeDirectory smtFile
        hLog <- openFile smtFile WriteMode
        hSetBuffering hLog $ BlockBuffering $ Just $ 1024*1024*64
-       me <- makeProcess cfg $ Just hLog
+       me <- makeContext' cfg $ Just hLog
        pre  <- smtPreamble cfg (solver cfg) me
        mapM_ (Bck.command_ (ctxSolver me) . lazyByteString . LTE.encodeUtf8) pre
        return me
@@ -341,14 +342,14 @@ makeContextWithSEnv cfg f env = do
 
 makeContextNoLog :: Config -> IO Context
 makeContextNoLog cfg
-  = do me  <- makeProcess cfg Nothing
+  = do me  <- makeContext' cfg Nothing
        pre <- smtPreamble cfg (solver cfg) me
        mapM_ (Bck.command_ (ctxSolver me) . lazyByteString . LTE.encodeUtf8) pre
        return me
 
-makeProcess :: Config -> Maybe Handle -> IO Context
-makeProcess cfg ctxLog
-  = do handle <- Process.new $ smtCmd (solver cfg) $ \s ->
+makeProcess :: Maybe Handle -> ((LBS.ByteString -> IO ()) -> Process.Config) -> IO (Bck.Backend, ContextHandle)
+makeProcess ctxLog cfg
+  = do handle <- Process.new $ cfg $ \s ->
          case ctxLog of
            Nothing -> return ()
            Just hLog -> LBS.hPutStrLn hLog $
@@ -357,10 +358,31 @@ makeProcess cfg ctxLog
            p = Process.process handle
            hIn = getStdin p
            hOut = getStdout p
-       loud <- isLoud
        hSetBuffering hOut $ BlockBuffering $ Just $ 1024*1024*64
        hSetBuffering hIn $ BlockBuffering $ Just $ 1024*1024*64
+       return (backend, Process handle)
+
+makeZ3 :: IO (Bck.Backend, ContextHandle)
+makeZ3 = do
+  handle <- Z3.new -- (Config [])
+  let backend = Z3.toBackend handle
+  return (backend, Z3lib handle)
+
+makeContext' :: Config -> Maybe Handle -> IO Context
+makeContext' cfg ctxLog = do
+       (backend, handle) <- case solver cfg of
+         Z3      -> makeProcess ctxLog $ Process.Config
+                            "z3"
+                            ["-smt2", "-in"]
+         -- Z3mem   -> makeZ3
+         Mathsat -> makeProcess ctxLog $ Process.Config
+                            "mathsat"
+                            ["-input=smt2"]
+         Cvc4    -> makeProcess ctxLog $ Process.Config
+                            "cvc4"
+                            ["--incremental", "-L", "smtlib2"]
        solver <- Bck.initSolver backend True
+       loud <- isLoud
        -- -- See Note [Async SMT API]
        -- queueTVar <- newTVarIO mempty
        -- writerAsync <- async $ forever $ do
@@ -374,7 +396,7 @@ makeProcess cfg ctxLog
        --   hFlush hIn
        resp <- newIORef mempty
        return Ctx { ctxSolver = solver
-                  , ctxProcess = handle
+                  , ctxHandle = handle
                   , ctxResp = resp
                   , ctxLog     = ctxLog
                   , ctxVerbose = loud
@@ -388,7 +410,9 @@ cleanupContext :: Context -> IO ExitCode
 cleanupContext Ctx{..} = do
   maybe (return ()) (hCloseMe "ctxLog") ctxLog
   -- cancel ctxAsync
-  Process.wait ctxProcess
+  case ctxHandle of
+    Process h -> Process.wait h
+    Z3lib   h -> Z3.close     h >> return ExitSuccess
 
 hCloseMe :: String -> Handle -> IO ()
 hCloseMe msg h = hClose h `catch` (\(exn :: IOException) -> putStrLn $ "OOPS, hClose breaks: " ++ msg ++ show exn)
@@ -397,10 +421,10 @@ hCloseMe msg h = hClose h `catch` (\(exn :: IOException) -> putStrLn $ "OOPS, hC
 {- "z3 -smtc SOFT_TIMEOUT=1000 -in" -}
 {- "z3 -smtc -in MBQI=false"        -}
 
-smtCmd         :: SMTSolver -> (LBS.ByteString -> IO ()) -> Process.Config --  T.Text
-smtCmd Z3      = Process.Config "z3" ["-smt2", "-in"]
-smtCmd Mathsat = Process.Config "mathsat" ["-input=smt2"]
-smtCmd Cvc4    = Process.Config "cvc4" ["--incremental", "-L", "smtlib2"]
+-- smtCmd         :: SMTSolver -> (LBS.ByteString -> IO ()) -> Process.Config --  T.Text
+-- smtCmd Z3      =
+-- smtCmd Mathsat =
+-- smtCmd Cvc4    =
 
 smtPreamble :: Config -> SMTSolver -> Context -> IO [LT.Text]
 smtPreamble cfg Z3 me
