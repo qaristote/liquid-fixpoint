@@ -154,9 +154,14 @@ runCommands cmds
 
 
 myLog :: LBS.ByteString -> IO ()
-myLog b =
+myLog _b =
   return ()
-  -- LBS.putStrLn b
+  -- LBS.putStrLn _b
+
+myLogText :: LT.Text -> IO ()
+myLogText _t =
+  return ()
+  -- LTIO.putStrLn _t
 
 checkValidWithContext :: Context -> [(Symbol, Sort)] -> Expr -> Expr -> IO Bool
 checkValidWithContext me xts p q =
@@ -220,10 +225,10 @@ smtSetMbqi me = asyncCommand me SetMbqi
 smtWrite :: Context -> Command -> IO ()
 smtWrite me !s = do
   let cmdText = ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 env s))
-  -- LTIO.putStrLn $ "[send]" <> (case s of
-  --                                CheckSat -> " "
-  --                                GetValue _ -> " "
-  --                                _ -> "[async] ") <> cmdText
+  myLogText $ "[send]" <> (case s of
+                            CheckSat -> " "
+                            GetValue _ -> " "
+                            _ -> "[async] ") <> cmdText
   smtWriteRaw me cmdText  $ case s of
     CheckSat -> True
     GetValue _ -> True
@@ -374,7 +379,7 @@ makeContext' cfg ctxLog = do
          Z3      -> makeProcess ctxLog $ Process.Config
                             "z3"
                             ["-smt2", "-in"]
-         -- Z3mem   -> makeZ3
+         Z3mem   -> makeZ3
          Mathsat -> makeProcess ctxLog $ Process.Config
                             "mathsat"
                             ["-input=smt2"]
@@ -431,6 +436,10 @@ hCloseMe msg h = hClose h `catch` (\(exn :: IOException) -> putStrLn $ "OOPS, hC
 
 smtPreamble :: Config -> SMTSolver -> Context -> IO [LT.Text]
 smtPreamble cfg Z3 me
+  = do v <- getZ3Version me
+       checkValidStringFlag Z3 v cfg
+       return $ z3_options ++ makeMbqi cfg ++ makeTimeout cfg ++ Thy.preamble cfg Z3
+smtPreamble cfg Z3mem me
   = do v <- getZ3Version me
        checkValidStringFlag Z3 v cfg
        return $ z3_options ++ makeMbqi cfg ++ makeTimeout cfg ++ Thy.preamble cfg Z3
