@@ -1,13 +1,17 @@
-{ pkgs ? import <nixpkgs> { } }:
+{ nixpkgs ? import <nixpkgs> {}, compiler ? "default" }:
 
 let
-  settings = { ... }: {
-    haskell = {
-      enable = true;
-      haskellPackages = pkgs.haskell.packages.ghc810;
-      cabal.enable = true;
-      packages = hp: with hp; [ haskell-language-server ];
-    };
-    buildInputs = with pkgs; [ z3 cvc4 stack ];
-  };
-in import ~/.config/venv-manager { inherit pkgs settings; }
+
+  inherit (nixpkgs) pkgs;
+
+  f = import ./default.nix { inherit (pkgs) fetchgitLocal; };
+
+  haskellPackages = if compiler == "default"
+                       then pkgs.haskellPackages
+                       else pkgs.haskell.packages.${compiler};
+
+  drv = haskellPackages.callPackage f { inherit (pkgs) z3; };
+
+in
+
+  if pkgs.lib.inNixShell then drv.env else drv
