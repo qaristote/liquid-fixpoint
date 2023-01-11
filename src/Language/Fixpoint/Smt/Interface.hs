@@ -298,7 +298,7 @@ smtWriteRaw me !s expectResponse = {- SCC "smtWriteRaw" -} do
   -- TODO don't rely on Text
   let sendWith sender = sender (ctxSolver me) $ lazyByteString $ LTE.encodeUtf8 s
   if expectResponse then do
-    resp <- LBS.dropWhileEnd isSpace <$> sendWith Bck.command
+    resp <- (LBS.reverse . LBS.dropWhile isSpace . LBS.reverse) <$> sendWith Bck.command
     modifyIORef (ctxResp me) (<> (resp <> "\n"))
   else do
     _ <- sendWith Bck.command_

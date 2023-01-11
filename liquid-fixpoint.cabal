@@ -128,7 +128,7 @@ library
                   , base                 >= 4.9.1.0 && < 5
                   , binary
                   , boxes
-                  , bytestring >= 0.11.2
+                  , bytestring >= 0.10.2.1
                   , cereal
                   , cmdargs
                   , containers
