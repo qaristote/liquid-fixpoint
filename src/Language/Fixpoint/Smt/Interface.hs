@@ -85,9 +85,9 @@ module Language.Fixpoint.Smt.Interface (
 
     ) where
 
-import           Control.Concurrent.Async (async, cancel)
-import           Control.Concurrent.STM
-  (TVar, atomically, modifyTVar, newTVarIO, readTVar, retry, writeTVar)
+-- import           Control.Concurrent.Async (async, cancel)
+-- import           Control.Concurrent.STM
+--   (TVar, atomically, modifyTVar, newTVarIO, readTVar, retry, writeTVar)
 import           Language.Fixpoint.Types.Config ( SMTSolver (..)
                                                 , Config
                                                 , solver
@@ -315,30 +315,30 @@ makeProcess cfg
        hSetBuffering hOut $ BlockBuffering $ Just $ 1024*1024*64
        hSetBuffering hIn $ BlockBuffering $ Just $ 1024*1024*64
        -- See Note [Async SMT API]
-       queueTVar <- newTVarIO mempty
-       writerAsync <- async $ forever $ do
-         t <- atomically $ do
-           builder <- readTVar queueTVar
-           let t = Builder.toLazyText builder
-           when (LT.null t) retry
-           writeTVar queueTVar mempty
-           return t
-         LTIO.hPutStr hIn t
-         hFlush hIn
+       -- queueTVar <- newTVarIO mempty
+       -- writerAsync <- async $ forever $ do
+       --   t <- atomically $ do
+       --     builder <- readTVar queueTVar
+       --     let t = Builder.toLazyText builder
+       --     when (LT.null t) retry
+       --     writeTVar queueTVar mempty
+       --     return t
+       --   LTIO.hPutStr hIn t
+       --   hFlush hIn
        return Ctx { ctxPid     = pid
                   , ctxIn      = hIn
                   , ctxOut     = hOut
                   , ctxLog     = Nothing
                   , ctxVerbose = loud
                   , ctxSymEnv  = mempty
-                  , ctxAsync   = writerAsync
-                  , ctxTVar    = queueTVar
+                  -- , ctxAsync   = writerAsync
+                  -- , ctxTVar    = queueTVar
                   }
 
 -- | Close file handles and wait for the solver process to terminate.
 cleanupContext :: Context -> IO ExitCode
 cleanupContext Ctx{..} = do
-  cancel ctxAsync
+  -- cancel ctxAsync
   hCloseMe "ctxIn" ctxIn
   hCloseMe "ctxOut"  ctxOut
   maybe (return ()) (hCloseMe "ctxLog") ctxLog
@@ -450,14 +450,15 @@ smtDefineFunc me name params rsort e =
 
 asyncCommand :: Context -> Command -> IO ()
 asyncCommand me cmd = do
-  let env = ctxSymEnv me
-      cmdText = {-# SCC "asyncCommand-runSmt2" #-} Builder.toLazyText $ runSmt2 env cmd
-  asyncPutStrLn (ctxTVar me) cmdText
-  maybe (return ()) (`LTIO.hPutStrLn` cmdText) (ctxLog me)
-  where
-    asyncPutStrLn :: TVar Builder.Builder -> LT.Text -> IO ()
-    asyncPutStrLn tv t = atomically $
-      modifyTVar tv (`mappend` (Builder.fromLazyText t `mappend` Builder.fromString "\n"))
+  smtWrite me ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 (ctxSymEnv me) cmd))
+  -- let env = ctxSymEnv me
+  --     cmdText = {-# SCC "asyncCommand-runSmt2" #-} Builder.toLazyText $ runSmt2 env cmd
+  -- asyncPutStrLn (ctxTVar me) cmdText
+  -- maybe (return ()) (`LTIO.hPutStrLn` cmdText) (ctxLog me)
+  -- where
+  --   asyncPutStrLn :: TVar Builder.Builder -> LT.Text -> IO ()
+  --   asyncPutStrLn tv t = atomically $
+  --     modifyTVar tv (`mappend` (Builder.fromLazyText t `mappend` Builder.fromString "\n"))
 
 smtAssertAsync :: Context -> Expr -> IO ()
 smtAssertAsync me p  = asyncCommand me $ Assert Nothing p

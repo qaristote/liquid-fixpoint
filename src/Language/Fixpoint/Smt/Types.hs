@@ -28,8 +28,8 @@ module Language.Fixpoint.Smt.Types (
 
     ) where
 
-import           Control.Concurrent.Async (Async)
-import           Control.Concurrent.STM (TVar)
+-- import           Control.Concurrent.Async (Async)
+-- import           Control.Concurrent.STM (TVar)
 import           Language.Fixpoint.Types
 import           Language.Fixpoint.Utils.Builder (Builder)
 import qualified Data.Text                as T
@@ -103,9 +103,9 @@ data Context = Ctx
   , ctxLog     :: !(Maybe Handle)
   , ctxVerbose :: !Bool
   , ctxSymEnv  :: !SymEnv
-  , ctxAsync   :: Async ()
-    -- | The next batch of queries to send to the SMT solver
-  , ctxTVar    :: TVar Builder
+  -- , ctxAsync   :: Async ()
+  --   -- | The next batch of queries to send to the SMT solver
+  -- , ctxTVar    :: TVar Builder
   }
 
 --------------------------------------------------------------------------------
