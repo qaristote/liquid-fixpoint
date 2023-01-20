@@ -31,7 +31,7 @@ module Language.Fixpoint.Smt.Types (
 
 import Control.Concurrent.Extra (Lock)
 import           Control.Concurrent.Async (Async)
--- import           Control.Concurrent.STM (TVar)
+import           Control.Concurrent.STM (TVar)
 import           Language.Fixpoint.Types
 import           Language.Fixpoint.Utils.Builder (Builder)
 import qualified Data.ByteString.Lazy.Char8 as LBS
@@ -110,8 +110,9 @@ data Context = Ctx
   , ctxLog     :: !(Maybe Handle)
   , ctxVerbose :: !Bool
   , ctxSymEnv  :: !SymEnv
-  , ctxLock :: Lock
   , ctxAsync :: Async ()
+  , ctxLock :: Lock
+  , ctxTVar :: TVar Bool 
   }
 
 --------------------------------------------------------------------------------

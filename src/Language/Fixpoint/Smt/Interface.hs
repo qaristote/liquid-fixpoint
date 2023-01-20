@@ -88,8 +88,8 @@ module Language.Fixpoint.Smt.Interface (
 
 import Control.Concurrent.Extra (newLock, withLock)
 import           Control.Concurrent.Async (async, cancel)
--- import           Control.Concurrent.STM
---   (TVar, atomically, modifyTVar, newTVarIO, readTVar, retry, writeTVar)
+import           Control.Concurrent.STM
+  (TVar, atomically, modifyTVar, newTVarIO, readTVar, retry, writeTVar)
 import           Language.Fixpoint.Types.Config ( SMTSolver (..)
                                         , Config
                                               , solver
@@ -306,6 +306,7 @@ smtWriteRaw me !s expectResponse = {- SCC "smtWriteRaw" -} do
     modifyIORef (ctxResp me) (<> (resp <> "\n"))
   else do
     _ <- sendWith Bck.command_
+    atomically $ writeTVar (ctxTVar me) True
     return ()
 
 -- | Reads a line of output from the SMT solver.
@@ -399,17 +400,13 @@ makeContext' cfg ctxLog = do
        loud <- isLoud
        lock <- newLock
        -- -- See Note [Async SMT API]
-       -- queueTVar <- newTVarIO mempty
+       tvar <- newTVarIO False
        writerAsync <- async $ forever $ do
-         -- return ()
+         atomically $ do
+           queueNotEmpty <- readTVar tvar
+           unless queueNotEmpty retry
+           writeTVar tvar False
          withLock lock $ Bck.flushQueue solver
-         -- Bck.flushQueue solver
-         -- t <- atomically $ do
-         --   builder <- readTVar queueTVar
-         --   let t = Builder.toLazyText builder
-         --   when (LT.null t) retry
-         --   writeTVar queueTVar mempty
-         --   return t
        resp <- newIORef mempty
        myLog "solver created"
        return Ctx { ctxSolver = solver
@@ -420,7 +417,7 @@ makeContext' cfg ctxLog = do
                   , ctxSymEnv  = mempty
                   , ctxAsync   = writerAsync
                   , ctxLock    = lock
-                  -- , ctxTVar    = queueTVar
+                  , ctxTVar    = tvar
                   }
 
 -- | Close file handles and wait for the solver process to terminate.
