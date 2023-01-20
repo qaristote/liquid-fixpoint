@@ -29,7 +29,8 @@ module Language.Fixpoint.Smt.Types (
 
     ) where
 
--- import           Control.Concurrent.Async (Async)
+import Control.Concurrent.Extra (Lock)
+import           Control.Concurrent.Async (Async)
 -- import           Control.Concurrent.STM (TVar)
 import           Language.Fixpoint.Types
 import           Language.Fixpoint.Utils.Builder (Builder)
@@ -109,6 +110,8 @@ data Context = Ctx
   , ctxLog     :: !(Maybe Handle)
   , ctxVerbose :: !Bool
   , ctxSymEnv  :: !SymEnv
+  , ctxLock :: Lock
+  , ctxAsync :: Async ()
   }
 
 --------------------------------------------------------------------------------

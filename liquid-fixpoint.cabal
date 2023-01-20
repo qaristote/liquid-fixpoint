@@ -157,6 +157,7 @@ library
                   , text
                   , transformers
                   , unordered-containers
+		  , extra
   ghc-options:
     -fwrite-ide-info
     -hiedir=.hie

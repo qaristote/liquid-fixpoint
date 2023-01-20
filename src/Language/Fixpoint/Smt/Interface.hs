@@ -86,7 +86,8 @@ module Language.Fixpoint.Smt.Interface (
 
     ) where
 
--- import           Control.Concurrent.Async (async, cancel)
+import Control.Concurrent.Extra (newLock, withLock)
+import           Control.Concurrent.Async (async, cancel)
 -- import           Control.Concurrent.STM
 --   (TVar, atomically, modifyTVar, newTVarIO, readTVar, retry, writeTVar)
 import           Language.Fixpoint.Types.Config ( SMTSolver (..)
@@ -153,15 +154,16 @@ runCommands cmds
 -}
 
 
+enableLogging :: Bool
+enableLogging =
+  -- True
+  False
+
 myLog :: LBS.ByteString -> IO ()
-myLog _b =
-  return ()
-  -- LBS.putStrLn _b
+myLog b = when enableLogging $ LBS.putStrLn b
 
 myLogText :: LT.Text -> IO ()
-myLogText _t =
-  return ()
-  -- LTIO.putStrLn _t
+myLogText t = when enableLogging $ LTIO.putStrLn t
 
 checkValidWithContext :: Context -> [(Symbol, Sort)] -> Expr -> Expr -> IO Bool
 checkValidWithContext me xts p q =
@@ -217,7 +219,8 @@ command me !cmd       = do
     hear _            = return Ok
 
 smtExit :: Context -> IO ()
-smtExit me = asyncCommand me Exit
+-- smtExit me = asyncCommand me Exit
+smtExit _ = return ()
 
 smtSetMbqi :: Context -> IO ()
 smtSetMbqi me = asyncCommand me SetMbqi
@@ -296,9 +299,10 @@ smtWriteRaw me !s expectResponse = {- SCC "smtWriteRaw" -} do
   --               LTIO.putStrLn ("CMD-RAW:" <> s <> ":CMD-RAW:DONE")
   maybe (return ()) (`LTIO.hPutStrLn` s) (ctxLog me)
   -- TODO don't rely on Text
-  let sendWith sender = sender (ctxSolver me) $ lazyByteString $ LTE.encodeUtf8 s
+  let !cmd = lazyByteString $ LTE.encodeUtf8 s
+      sendWith sender = withLock (ctxLock me) $ sender (ctxSolver me) $ cmd
   if expectResponse then do
-    resp <- (LBS.reverse . LBS.dropWhile isSpace . LBS.reverse) <$> sendWith Bck.command
+    resp <- LBS.reverse . LBS.dropWhile isSpace . LBS.reverse <$> sendWith Bck.command
     modifyIORef (ctxResp me) (<> (resp <> "\n"))
   else do
     _ <- sendWith Bck.command_
@@ -332,7 +336,9 @@ makeContext cfg f
        hSetBuffering hLog $ BlockBuffering $ Just $ 1024*1024*64
        me <- makeContext' cfg $ Just hLog
        pre  <- smtPreamble cfg (solver cfg) me
-       mapM_ (Bck.command_ (ctxSolver me) . lazyByteString . LTE.encodeUtf8) pre
+       mapM_ (\cmd -> do
+                 let !cmd' = lazyByteString $ LTE.encodeUtf8 cmd
+                 withLock (ctxLock me) $ Bck.command_ (ctxSolver me) cmd') pre
        return me
     where
        smtFile = extFileName Smt2 f
@@ -349,7 +355,9 @@ makeContextNoLog :: Config -> IO Context
 makeContextNoLog cfg
   = do me  <- makeContext' cfg Nothing
        pre <- smtPreamble cfg (solver cfg) me
-       mapM_ (Bck.command_ (ctxSolver me) . lazyByteString . LTE.encodeUtf8) pre
+       mapM_ (\cmd -> do
+                 let !cmd' = lazyByteString $ LTE.encodeUtf8 cmd
+                 withLock (ctxLock me) $ Bck.command_ (ctxSolver me) cmd') pre
        return me
 
 makeProcess :: Maybe Handle -> ((LBS.ByteString -> IO ()) -> Process.Config) -> IO (Bck.Backend, ContextHandle)
@@ -369,12 +377,13 @@ makeProcess ctxLog cfg
 
 makeZ3 :: IO (Bck.Backend, ContextHandle)
 makeZ3 = do
-  handle <- Z3.new -- (Config [])
+  handle <- Z3.new Z3.defaultConfig
   let backend = Z3.toBackend handle
   return (backend, Z3lib handle)
 
 makeContext' :: Config -> Maybe Handle -> IO Context
 makeContext' cfg ctxLog = do
+       myLog "creating solver" 
        (backend, handle) <- case solver cfg of
          Z3      -> makeProcess ctxLog $ Process.Config
                             "z3"
@@ -386,27 +395,31 @@ makeContext' cfg ctxLog = do
          Cvc4    -> makeProcess ctxLog $ Process.Config
                             "cvc4"
                             ["--incremental", "-L", "smtlib2"]
-       solver <- Bck.initSolver backend True
+       solver <- Bck.initSolver Bck.Queuing backend
        loud <- isLoud
+       lock <- newLock
        -- -- See Note [Async SMT API]
        -- queueTVar <- newTVarIO mempty
-       -- writerAsync <- async $ forever $ do
-       --   t <- atomically $ do
-       --     builder <- readTVar queueTVar
-       --     let t = Builder.toLazyText builder
-       --     when (LT.null t) retry
-       --     writeTVar queueTVar mempty
-       --     return t
-       --   LTIO.hPutStr hIn t
-       --   hFlush hIn
+       writerAsync <- async $ forever $ do
+         -- return ()
+         withLock lock $ Bck.flushQueue solver
+         -- Bck.flushQueue solver
+         -- t <- atomically $ do
+         --   builder <- readTVar queueTVar
+         --   let t = Builder.toLazyText builder
+         --   when (LT.null t) retry
+         --   writeTVar queueTVar mempty
+         --   return t
        resp <- newIORef mempty
+       myLog "solver created"
        return Ctx { ctxSolver = solver
                   , ctxHandle = handle
                   , ctxResp = resp
                   , ctxLog     = ctxLog
                   , ctxVerbose = loud
                   , ctxSymEnv  = mempty
-                  -- , ctxAsync   = writerAsync
+                  , ctxAsync   = writerAsync
+                  , ctxLock    = lock
                   -- , ctxTVar    = queueTVar
                   }
 
@@ -415,10 +428,13 @@ cleanupContext :: Context -> IO ExitCode
 cleanupContext Ctx{..} = do
   myLog "cleaning"
   maybe (return ()) (hCloseMe "ctxLog") ctxLog
-  -- cancel ctxAsync
-  res <- (case ctxHandle of
+  myLog "closed hLog"
+  -- somehow we need to acquire the lock first ...
+  withLock ctxLock $ cancel ctxAsync
+  myLog "canceled queue"
+  res <- case ctxHandle of
     Process h -> Process.close h
-    Z3lib   h -> Z3.close      h) >> return ExitSuccess
+    Z3lib   h -> Z3.close      h >> return ExitSuccess
   myLog "cleaned!"
   return res
 
@@ -449,7 +465,8 @@ smtPreamble cfg s _
 getZ3Version :: Context -> IO [Int]
 getZ3Version me
   = do -- resp is like (:version "4.8.15")
-       resp <- Bck.command (ctxSolver me) "(get-info :version)"
+       resp <- withLock (ctxLock me) $ Bck.command (ctxSolver me) "(get-info :version)"
+       -- resp <- Bck.command (ctxSolver me) "(get-info :version)"
        case LBS.split '"' resp of
          _:vText:_ -> do
            let parsedComponents = [ reads (LBS.unpack cText) | cText <- LBS.split '.' vText ]
