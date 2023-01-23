@@ -7,7 +7,7 @@
 {-# LANGUAGE UndecidableInstances      #-}
 {-# LANGUAGE ScopedTypeVariables       #-}
 {-# LANGUAGE PatternGuards             #-}
-{-# LANGUAGE DoAndIfThenElse #-}
+{-# LANGUAGE DoAndIfThenElse           #-}
 
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
@@ -86,15 +86,12 @@ module Language.Fixpoint.Smt.Interface (
 
     ) where
 
--- import           Control.Concurrent.Async (async, cancel)
--- import           Control.Concurrent.STM
---   (TVar, atomically, modifyTVar, newTVarIO, readTVar, retry, writeTVar)
 import           Language.Fixpoint.Types.Config ( SMTSolver (..)
-                                        , Config
-                                              , solver
-                                              , smtTimeout
-                                              , gradual
-                                              , stringTheory)
+                                                , Config
+                                                , solver
+                                                , smtTimeout
+                                                , gradual
+                                                , stringTheory)
 import qualified Language.Fixpoint.Misc          as Misc
 import           Language.Fixpoint.Types.Errors
 import           Language.Fixpoint.Utils.Files
@@ -106,29 +103,24 @@ import           Language.Fixpoint.Smt.Serialize ()
 import           Control.Applicative      ((<|>))
 import           Control.Monad
 import           Control.Exception
+import           Data.ByteString.Builder  (lazyByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import Data.ByteString.Builder (lazyByteString)
 import           Data.Char
 import qualified Data.HashMap.Strict      as M
-import Data.IORef (newIORef, modifyIORef, atomicModifyIORef)
+import           Data.IORef              (newIORef, modifyIORef, atomicModifyIORef)
 import           Data.Maybe              (fromMaybe)
 import qualified Data.Text                as T
-import qualified Data.Text.Encoding                as TE
+import qualified Data.Text.Encoding       as TE
 -- import           Data.Text.Format
--- import qualified Data.Text.IO             as TIO
 import qualified Data.Text.Lazy           as LT
-import qualified Data.Text.Lazy.Encoding as LTE
-import qualified Data.Text.Lazy.IO as LTIO
-import qualified SMTLIB.Backends as Bck
-import qualified SMTLIB.Backends.Process as Process
-import qualified SMTLIB.Backends.Z3 as Z3
+import qualified Data.Text.Lazy.Encoding  as LTE
+import qualified Data.Text.Lazy.IO        as LTIO
 import           System.Directory
 import           System.Console.CmdArgs.Verbosity
 import           System.Exit              hiding (die)
 import           System.FilePath
 import           System.IO
--- import           System.Process
-import System.Process.Typed (getStdin, getStdout)
+import           System.Process.Typed
 import qualified Data.Attoparsec.Text     as A
 -- import qualified Data.HashMap.Strict      as M
 import           Data.Attoparsec.Internal.Types (Parser)
@@ -137,31 +129,23 @@ import           Language.Fixpoint.SortCheck
 import           Language.Fixpoint.Utils.Builder as Builder
 -- import qualified Language.Fixpoint.Types as F
 -- import           Language.Fixpoint.Types.PrettyPrint (tracepp)
+import qualified SMTLIB.Backends as Bck
+import qualified SMTLIB.Backends.Process as Process
+import qualified SMTLIB.Backends.Z3 as Z3
 
 {-
 runFile f
-= readFile f >>= runString
+  = readFile f >>= runString
 
 runString str
-= runCommands $ rr str
+  = runCommands $ rr str
 
 runCommands cmds
-= do me   <- makeContext Z3
-      mapM_ (T.putStrLn . smt2) cmds
-      zs   <- mapM (command me) cmds
-      return zs
+  = do me   <- makeContext Z3
+       mapM_ (T.putStrLn . smt2) cmds
+       zs   <- mapM (command me) cmds
+       return zs
 -}
-
-
-myLog :: LBS.ByteString -> IO ()
-myLog _b =
-  return ()
-  -- LBS.putStrLn _b
-
-myLogText :: LT.Text -> IO ()
-myLogText _t =
-  return ()
-  -- LTIO.putStrLn _t
 
 checkValidWithContext :: Context -> [(Symbol, Sort)] -> Expr -> Expr -> IO Bool
 checkValidWithContext me xts p q =
@@ -204,13 +188,9 @@ checkValids cfg f xts ps
 {-# SCC command #-}
 command              :: Context -> Command -> IO Response
 --------------------------------------------------------------------------------
-command me !cmd       = do
-  myLog "command"
-  res <- say >> hear cmd
-  myLog "command processed"
-  return res
-  -- TODO don't split into smtWrite and smtRead
+command me !cmd       = say >> hear cmd
   where
+    -- TODO don't split IO into smtWrite and smtRead
     say               = smtWrite me cmd
     hear CheckSat     = smtRead me
     hear (GetValue _) = smtRead me
@@ -225,15 +205,12 @@ smtSetMbqi me = asyncCommand me SetMbqi
 smtWrite :: Context -> Command -> IO ()
 smtWrite me !s = do
   let cmdText = ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 env s))
-  myLogText $ "[send]" <> (case s of
-                            CheckSat -> " "
-                            GetValue _ -> " "
-                            _ -> "[async] ") <> cmdText
-  smtWriteRaw me cmdText  $ case s of
+  smtWriteRaw me cmdText $ case s of
     CheckSat -> True
     GetValue _ -> True
     _ -> False
-  where env = ctxSymEnv me
+  where
+    env = ctxSymEnv me
 
 smtRead :: Context -> IO Response
 smtRead me = {- SCC "smtRead" -} do
@@ -297,40 +274,37 @@ smtWriteRaw me !s expectResponse = {- SCC "smtWriteRaw" -} do
   maybe (return ()) (`LTIO.hPutStrLn` s) (ctxLog me)
   -- TODO don't rely on Text
   let sendWith sender = sender (ctxSolver me) $ lazyByteString $ LTE.encodeUtf8 s
-  if expectResponse then do
-    resp <- (LBS.reverse . LBS.dropWhile isSpace . LBS.reverse) <$> sendWith Bck.command
-    modifyIORef (ctxResp me) (<> (resp <> "\n"))
-  else do
-    _ <- sendWith Bck.command_
-    return ()
+  if expectResponse
+    then do
+      resp <-
+        LBS.reverse . LBS.dropWhile isSpace . LBS.reverse
+          <$> sendWith Bck.command
+      modifyIORef (ctxResp me) (<> (resp <> "\n"))
+    else do
+      _ <- sendWith Bck.command_
+      return ()
 
 -- | Reads a line of output from the SMT solver.
 smtReadRaw :: Context -> IO T.Text
 smtReadRaw me = do
-  myLog "reading"
   respLn <- atomicModifyIORef (ctxResp me) $ \resps ->
     let (resp, rest) = LBS.span (/= '\n') resps
-    in  (LBS.dropWhile isSpace rest, resp)
-  myLog $ "[read] " <> respLn
+     in (LBS.dropWhile isSpace rest, resp)
   return $ TE.decodeUtf8With (const $ const $ Just ' ') $ LBS.toStrict respLn
-{-# SCC smtReadRaw  #-}
-
--- hPutStrLnNow :: Handle -> LT.Text -> IO ()
--- hPutStrLnNow h !s = LTIO.hPutStrLn h s >> hFlush h
--- {-# SCC hPutStrLnNow #-}
+{-# SCC smtReadRaw #-}
 
 --------------------------------------------------------------------------
 -- | SMT Context ---------------------------------------------------------
 --------------------------------------------------------------------------
 
 --------------------------------------------------------------------------
-makeContext   :: Config -> FilePath -> IO Context
+makeContext :: Config -> FilePath -> IO Context
 --------------------------------------------------------------------------
 makeContext cfg f
   = do createDirectoryIfMissing True $ takeDirectory smtFile
        hLog <- openFile smtFile WriteMode
-       hSetBuffering hLog $ BlockBuffering $ Just $ 1024*1024*64
-       me <- makeContext' cfg $ Just hLog
+       hSetBuffering hLog $ BlockBuffering $ Just $ 1024 * 1024 * 64
+       me   <- makeContext' cfg $ Just hLog
        pre  <- smtPreamble cfg (solver cfg) me
        mapM_ (Bck.command_ (ctxSolver me) . lazyByteString . LTE.encodeUtf8) pre
        return me
@@ -354,97 +328,68 @@ makeContextNoLog cfg
 
 makeProcess :: Maybe Handle -> ((LBS.ByteString -> IO ()) -> Process.Config) -> IO (Bck.Backend, ContextHandle)
 makeProcess ctxLog cfg
-  = do handle <- Process.new $ cfg $ \s ->
-         case ctxLog of
-           Nothing -> return ()
-           Just hLog -> LBS.hPutStrLn hLog $
-             "OOPS, external process error: " <> s
+  = do handle     <- Process.new $ cfg $
+                       \s -> case ctxLog of
+                         Nothing -> return ()
+                         Just hLog ->
+                           LBS.hPutStrLn hLog $
+                             "OOPS, external process error: " <> s
        let backend = Process.toBackend handle
-           p = Process.process handle
-           hIn = getStdin p
-           hOut = getStdout p
-       hSetBuffering hOut $ BlockBuffering $ Just $ 1024*1024*64
-       hSetBuffering hIn $ BlockBuffering $ Just $ 1024*1024*64
+           p       = Process.process handle
+           hIn     = getStdin p
+           hOut    = getStdout p
+       hSetBuffering hOut $ BlockBuffering $ Just $ 1024 * 1024 * 64
+       hSetBuffering hIn $ BlockBuffering $ Just $ 1024 * 1024 * 64
        return (backend, Process handle)
 
 makeZ3 :: IO (Bck.Backend, ContextHandle)
-makeZ3 = do
-  handle <- Z3.new -- (Config [])
-  let backend = Z3.toBackend handle
-  return (backend, Z3lib handle)
+makeZ3
+  = do handle     <- Z3.new
+       let backend = Z3.toBackend handle
+       return (backend, Z3lib handle)
 
 makeContext' :: Config -> Maybe Handle -> IO Context
-makeContext' cfg ctxLog = do
-       (backend, handle) <- case solver cfg of
-         Z3      -> makeProcess ctxLog $ Process.Config
-                            "z3"
-                            ["-smt2", "-in"]
+makeContext' cfg ctxLog
+  = do (backend, handle) <- case solver cfg of
+         Z3      ->
+           {- "z3 -smt2 -in"                   -}
+           {- "z3 -smtc SOFT_TIMEOUT=1000 -in" -}
+           {- "z3 -smtc -in MBQI=false"        -}
+           makeProcess ctxLog $ Process.Config "z3" ["-smt2", "-in"]
          Z3mem   -> makeZ3
-         Mathsat -> makeProcess ctxLog $ Process.Config
-                            "mathsat"
-                            ["-input=smt2"]
-         Cvc4    -> makeProcess ctxLog $ Process.Config
-                            "cvc4"
-                            ["--incremental", "-L", "smtlib2"]
-       solver <- Bck.initSolver backend True
-       loud <- isLoud
-       -- -- See Note [Async SMT API]
-       -- queueTVar <- newTVarIO mempty
-       -- writerAsync <- async $ forever $ do
-       --   t <- atomically $ do
-       --     builder <- readTVar queueTVar
-       --     let t = Builder.toLazyText builder
-       --     when (LT.null t) retry
-       --     writeTVar queueTVar mempty
-       --     return t
-       --   LTIO.hPutStr hIn t
-       --   hFlush hIn
-       resp <- newIORef mempty
-       return Ctx { ctxSolver = solver
-                  , ctxHandle = handle
-                  , ctxResp = resp
+         Mathsat -> makeProcess ctxLog $ Process.Config "mathsat" ["-input=smt2"]
+         Cvc4    -> makeProcess ctxLog $
+                      Process.Config "cvc4" ["--incremental", "-L", "smtlib2"]
+       solver            <- Bck.initSolver backend True
+       loud              <- isLoud
+       resp              <- newIORef mempty
+       return Ctx { ctxSolver  = solver
+                  , ctxHandle  = handle
+                  , ctxResp    = resp
                   , ctxLog     = ctxLog
                   , ctxVerbose = loud
                   , ctxSymEnv  = mempty
-                  -- , ctxAsync   = writerAsync
-                  -- , ctxTVar    = queueTVar
                   }
 
 -- | Close file handles and wait for the solver process to terminate.
 cleanupContext :: Context -> IO ExitCode
-cleanupContext Ctx{..} = do
-  myLog "cleaning"
+cleanupContext Ctx {..} = do
   maybe (return ()) (hCloseMe "ctxLog") ctxLog
-  -- cancel ctxAsync
-  res <- (case ctxHandle of
-    Process h -> Process.close h
-    Z3lib   h -> Z3.close      h) >> return ExitSuccess
-  myLog "cleaned!"
-  return res
+  case ctxHandle of
+    Process h -> Process.wait h
+    Z3lib h -> Z3.close h >> return ExitSuccess
 
 hCloseMe :: String -> Handle -> IO ()
 hCloseMe msg h = hClose h `catch` (\(exn :: IOException) -> putStrLn $ "OOPS, hClose breaks: " ++ msg ++ show exn)
 
-{- "z3 -smt2 -in"                   -}
-{- "z3 -smtc SOFT_TIMEOUT=1000 -in" -}
-{- "z3 -smtc -in MBQI=false"        -}
-
--- smtCmd         :: SMTSolver -> (LBS.ByteString -> IO ()) -> Process.Config --  T.Text
--- smtCmd Z3      =
--- smtCmd Mathsat =
--- smtCmd Cvc4    =
-
 smtPreamble :: Config -> SMTSolver -> Context -> IO [LT.Text]
-smtPreamble cfg Z3 me
-  = do v <- getZ3Version me
-       checkValidStringFlag Z3 v cfg
-       return $ z3_options ++ makeMbqi cfg ++ makeTimeout cfg ++ Thy.preamble cfg Z3
-smtPreamble cfg Z3mem me
-  = do v <- getZ3Version me
-       checkValidStringFlag Z3 v cfg
-       return $ z3_options ++ makeMbqi cfg ++ makeTimeout cfg ++ Thy.preamble cfg Z3
-smtPreamble cfg s _
-  = checkValidStringFlag s [] cfg >> return (Thy.preamble cfg s)
+smtPreamble cfg s me
+  | s == Z3 || s == Z3mem
+    = do v <- getZ3Version me
+         checkValidStringFlag Z3 v cfg
+         return $ z3_options ++ makeMbqi cfg ++ makeTimeout cfg ++ Thy.preamble cfg Z3
+  | otherwise
+    = checkValidStringFlag s [] cfg >> return (Thy.preamble cfg s)
 
 getZ3Version :: Context -> IO [Int]
 getZ3Version me
@@ -500,7 +445,7 @@ smtDataDecl me ds = interact' me (DeclData ds)
 deconSort :: Sort -> ([Sort], Sort)
 deconSort t = case functionSort t of
                 Just (_, ins, out) -> (ins, out)
-                Nothing            -> ([] , t  )
+                Nothing            -> ([], t)
 
 -- hack now this is used only for checking gradual condition.
 smtCheckSat :: Context -> Expr -> IO Bool
@@ -527,17 +472,12 @@ smtDefineFunc me name params rsort e =
 -- Async calls to the smt
 --
 -- See Note [Async SMT API]
+-- deprecated, equivalent to 'command'
 -----------------------------------------------------------------
 
 asyncCommand :: Context -> Command -> IO ()
 asyncCommand me cmd = do
-  -- asyncPutStrLn (ctxTVar me) cmdText
   smtWrite me cmd
-  -- maybe (return ()) (`LTIO.hPutStrLn` cmdText) (ctxLog me)
-  -- where
-  --   asyncPutStrLn :: TVar Builder.Builder -> LT.Text -> IO ()
-  --   asyncPutStrLn tv t = atomically $
-  --     modifyTVar tv (`mappend` (Builder.fromLazyText t `mappend` Builder.fromString "\n"))
 
 smtAssertAsync :: Context -> Expr -> IO ()
 smtAssertAsync me p  = asyncCommand me $ Assert Nothing p
@@ -563,11 +503,7 @@ smtPopAsync me = asyncCommand me Pop
 
 {-# SCC readCheckUnsat #-}
 readCheckUnsat :: Context -> IO Bool
-readCheckUnsat me = do
-  myLog "readCheckUnsat"
-  res <- respSat <$> smtRead me
-  myLog "readCheckUnsat done"
-  return res
+readCheckUnsat me = respSat <$> smtRead me
 
 smtAssertAxiom :: Context -> Triggered Expr -> IO ()
 smtAssertAxiom me p  = interact' me (AssertAx p)

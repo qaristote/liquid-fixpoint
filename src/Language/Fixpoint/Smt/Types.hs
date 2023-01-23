@@ -29,12 +29,10 @@ module Language.Fixpoint.Smt.Types (
 
     ) where
 
--- import           Control.Concurrent.Async (Async)
--- import           Control.Concurrent.STM (TVar)
 import           Language.Fixpoint.Types
 import           Language.Fixpoint.Utils.Builder (Builder)
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import Data.IORef
+import           Data.IORef
 import qualified Data.Text                as T
 import           Text.PrettyPrint.HughesPJ
 import qualified SMTLIB.Backends as Bck
@@ -42,7 +40,6 @@ import qualified SMTLIB.Backends.Process as Process
 import qualified SMTLIB.Backends.Z3 as Z3
 
 import           System.IO                (Handle)
--- import           System.Process
 -- import           Language.Fixpoint.Misc   (traceShow)
 
 --------------------------------------------------------------------------------
@@ -99,12 +96,17 @@ data Response     = Ok
                   | Error !T.Text
                   deriving (Eq, Show)
 
+-- | Represention of the SMT solver backend
 data ContextHandle = Process Process.Handle | Z3lib Z3.Handle
 
--- | Information about the external SMT process
+-- | Additional information around the SMT solver backend
 data Context = Ctx
-  { ctxSolver :: Bck.Solver
+  {
+  -- | The high-level interface for interacting with the SMT solver backend.
+    ctxSolver :: Bck.Solver
+  -- | The low-level handle for managing the SMT solver backend.
   , ctxHandle :: ContextHandle
+  -- | A buffer holding the solver's responses.
   , ctxResp :: IORef LBS.ByteString
   , ctxLog     :: !(Maybe Handle)
   , ctxVerbose :: !Bool
