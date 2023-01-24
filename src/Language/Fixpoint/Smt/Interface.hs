@@ -107,7 +107,7 @@ import           Data.ByteString.Builder  (lazyByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Char
 import qualified Data.HashMap.Strict      as M
-import           Data.IORef              (newIORef, modifyIORef, atomicModifyIORef)
+import           Data.IORef              (newIORef, modifyIORef, readIORef, writeIORef)
 import           Data.Maybe              (fromMaybe)
 import qualified Data.Text                as T
 import qualified Data.Text.Encoding       as TE
@@ -287,9 +287,9 @@ smtWriteRaw me !s expectResponse = {- SCC "smtWriteRaw" -} do
 -- | Reads a line of output from the SMT solver.
 smtReadRaw :: Context -> IO T.Text
 smtReadRaw me = do
-  respLn <- atomicModifyIORef (ctxResp me) $ \resps ->
-    let (resp, rest) = LBS.span (/= '\n') resps
-     in (LBS.dropWhile isSpace rest, resp)
+  resps <- readIORef $ ctxResp me
+  let (respLn, rest) = LBS.span (/= '\n') resps
+  writeIORef (ctxResp me) $ LBS.dropWhile isSpace rest
   return $ TE.decodeUtf8With (const $ const $ Just ' ') $ LBS.toStrict respLn
 {-# SCC smtReadRaw #-}
 
