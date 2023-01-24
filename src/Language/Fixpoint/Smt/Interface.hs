@@ -344,7 +344,7 @@ makeProcess ctxLog cfg
 
 makeZ3 :: IO (Bck.Backend, ContextHandle)
 makeZ3
-  = do handle     <- Z3.new
+  = do handle     <- Z3.new Z3.defaultConfig
        let backend = Z3.toBackend handle
        return (backend, Z3lib handle)
 
@@ -360,7 +360,7 @@ makeContext' cfg ctxLog
          Mathsat -> makeProcess ctxLog $ Process.Config "mathsat" ["-input=smt2"]
          Cvc4    -> makeProcess ctxLog $
                       Process.Config "cvc4" ["--incremental", "-L", "smtlib2"]
-       solver            <- Bck.initSolver backend True
+       solver            <- Bck.initSolver Bck.Queuing backend
        loud              <- isLoud
        resp              <- newIORef mempty
        return Ctx { ctxSolver  = solver
@@ -376,7 +376,7 @@ cleanupContext :: Context -> IO ExitCode
 cleanupContext Ctx {..} = do
   maybe (return ()) (hCloseMe "ctxLog") ctxLog
   case ctxHandle of
-    Process h -> Process.wait h
+    Process h -> Process.close h
     Z3lib h -> Z3.close h >> return ExitSuccess
 
 hCloseMe :: String -> Handle -> IO ()
