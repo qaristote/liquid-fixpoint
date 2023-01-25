@@ -29,10 +29,14 @@ module Language.Fixpoint.Smt.Types (
 
     ) where
 
+import           Control.Concurrent.Async (Async)
+import           Control.Concurrent.STM (TVar)
+import           Control.Concurrent.STM.TChan (TChan)
 import           Language.Fixpoint.Types
 import           Language.Fixpoint.Utils.Builder (Builder)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.IORef
+import           Data.Sequence (Seq)
 import qualified Data.Text                as T
 import           Text.PrettyPrint.HughesPJ
 import qualified SMTLIB.Backends as Bck
@@ -103,14 +107,19 @@ data ContextHandle = Process Process.Handle | Z3lib Z3.Handle
 data Context = Ctx
   {
   -- | The high-level interface for interacting with the SMT solver backend.
-    ctxSolver :: Bck.Solver
+    ctxSolver  :: Bck.Solver
+  -- -- | The high-level interface for interacting asynchronously with the SMT solver backend.
+  -- , ctxAsyncSolver :: Bck.Solver
   -- | The low-level handle for managing the SMT solver backend.
-  , ctxHandle :: ContextHandle
+  , ctxHandle  :: ContextHandle
   -- | A buffer holding the solver's responses.
-  , ctxResp :: IORef LBS.ByteString
+  , ctxResp    :: TChan LBS.ByteString
   , ctxLog     :: !(Maybe Handle)
   , ctxVerbose :: !Bool
   , ctxSymEnv  :: !SymEnv
+  , ctxAsync   :: Async ()
+    -- | The next batch of queries to send to the SMT solver
+  , ctxTVar    :: TVar (Seq Command)
   }
 
 --------------------------------------------------------------------------------
