@@ -86,6 +86,9 @@ module Language.Fixpoint.Smt.Interface (
 
     ) where
 
+import           Control.Concurrent.Async (async, cancel)
+import           Control.Concurrent.STM (atomically, newTVarIO, modifyTVar, readTVar, writeTVar, retry)
+import           Control.Concurrent.STM.TChan (newTChanIO, readTChan, writeTChan)
 import           Language.Fixpoint.Types.Config ( SMTSolver (..)
                                                 , Config
                                                 , solver
@@ -107,7 +110,6 @@ import           Data.ByteString.Builder  (lazyByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Char
 import qualified Data.HashMap.Strict      as M
-import           Data.IORef              (newIORef, modifyIORef, atomicModifyIORef)
 import           Data.Maybe              (fromMaybe)
 import qualified Data.Text                as T
 import qualified Data.Text.Encoding       as TE
@@ -274,22 +276,23 @@ smtWriteRaw me !s expectResponse = {- SCC "smtWriteRaw" -} do
   maybe (return ()) (`LTIO.hPutStrLn` s) (ctxLog me)
   -- TODO don't rely on Text
   let sendWith sender = sender (ctxSolver me) $ lazyByteString $ LTE.encodeUtf8 s
+  -- LTIO.putStrLn $ "[send] " <> s
   if expectResponse
     then do
       resp <-
         LBS.reverse . LBS.dropWhile isSpace . LBS.reverse
           <$> sendWith Bck.command
-      modifyIORef (ctxResp me) (<> (resp <> "\n"))
+      atomically $ writeTChan (ctxResp me) resp
     else do
       _ <- sendWith Bck.command_
       return ()
 
 -- | Reads a line of output from the SMT solver.
 smtReadRaw :: Context -> IO T.Text
-smtReadRaw me = do
-  respLn <- atomicModifyIORef (ctxResp me) $ \resps ->
-    let (resp, rest) = LBS.span (/= '\n') resps
-     in (LBS.dropWhile isSpace rest, resp)
+smtReadRaw Ctx {..} = do
+  -- LBS.putStrLn "reading ..."
+  respLn <- atomically $ readTChan ctxResp
+  -- LBS.putStrLn $ "[read] " <> respLn
   return $ TE.decodeUtf8With (const $ const $ Just ' ') $ LBS.toStrict respLn
 {-# SCC smtReadRaw #-}
 
@@ -362,19 +365,31 @@ makeContext' cfg ctxLog
                       Process.Config "cvc4" ["--incremental", "-L", "smtlib2"]
        solver            <- Bck.initSolver Bck.Queuing backend
        loud              <- isLoud
-       resp              <- newIORef mempty
-       return Ctx { ctxSolver  = solver
-                  , ctxHandle  = handle
-                  , ctxResp    = resp
-                  , ctxLog     = ctxLog
-                  , ctxVerbose = loud
-                  , ctxSymEnv  = mempty
-                  }
+       resp              <- newTChanIO
+       queueTVar         <- newTVarIO Nothing
+       noAsync           <- async $ return ()
+       let me            = Ctx { ctxSolver  = solver
+                               -- , ctxAsyncSolver = solverAsync
+                               , ctxHandle  = handle
+                               , ctxResp    = resp
+                               , ctxLog     = ctxLog
+                               , ctxVerbose = loud
+                               , ctxSymEnv  = mempty
+                               , ctxAsync   = noAsync
+                               , ctxTVar    = queueTVar
+                               }
+       writerAsync <- async $ forever $ do
+         sendCmds <- atomically $ do
+           readTVar queueTVar >>= maybe retry (<$ writeTVar queueTVar Nothing)
+         sendCmds
+         Bck.flushQueue solver
+       return me { ctxAsync = writerAsync }
 
 -- | Close file handles and wait for the solver process to terminate.
 cleanupContext :: Context -> IO ExitCode
 cleanupContext Ctx {..} = do
   maybe (return ()) (hCloseMe "ctxLog") ctxLog
+  cancel ctxAsync
   case ctxHandle of
     Process h -> Process.kill h >> return ExitSuccess
     Z3lib h -> Z3.close h >> return ExitSuccess
@@ -472,18 +487,23 @@ smtDefineFunc me name params rsort e =
 -- Async calls to the smt
 --
 -- See Note [Async SMT API]
--- deprecated, equivalent to 'command'
 -----------------------------------------------------------------
 
 asyncCommand :: Context -> Command -> IO ()
-asyncCommand me cmd = do
-  smtWrite me cmd
+asyncCommand me@(Ctx {..}) cmd = do
+  -- let cmdText = ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 ctxSymEnv cmd))
+  -- LTIO.putStrLn $ "[async] [load] " <> cmdText
+  let sendCmd = do
+        -- LBS.putStrLn "[async] "
+        smtWrite me cmd
+  atomically $ modifyTVar ctxTVar $ Just . maybe sendCmd (>> sendCmd)
 
 smtAssertAsync :: Context -> Expr -> IO ()
 smtAssertAsync me p  = asyncCommand me $ Assert Nothing p
 
 smtCheckUnsatAsync :: Context -> IO ()
-smtCheckUnsatAsync me = asyncCommand me CheckSat
+smtCheckUnsatAsync me = do
+  asyncCommand me CheckSat
 
 smtBracketAsyncAt :: SrcSpan -> Context -> String -> IO a -> IO a
 smtBracketAsyncAt sp x y z = smtBracketAsync x y z `catch` dieAt sp
@@ -503,7 +523,9 @@ smtPopAsync me = asyncCommand me Pop
 
 {-# SCC readCheckUnsat #-}
 readCheckUnsat :: Context -> IO Bool
-readCheckUnsat me = respSat <$> smtRead me
+readCheckUnsat me = do
+  -- LBS.putStrLn "reading sat resp"
+  respSat <$> smtRead me
 
 smtAssertAxiom :: Context -> Triggered Expr -> IO ()
 smtAssertAxiom me p  = interact' me (AssertAx p)
@@ -512,7 +534,8 @@ smtDistinct :: Context -> [Expr] -> IO ()
 smtDistinct me az = interact' me (Distinct az)
 
 smtCheckUnsat :: Context -> IO Bool
-smtCheckUnsat me  = respSat <$> command me CheckSat
+smtCheckUnsat me  = do
+  respSat <$> command me CheckSat
 
 smtBracketAt :: SrcSpan -> Context -> String -> IO a -> IO a
 smtBracketAt sp x y z = smtBracket x y z `catch` dieAt sp
