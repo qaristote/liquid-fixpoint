@@ -106,7 +106,7 @@ import           Language.Fixpoint.Smt.Serialize ()
 import           Control.Applicative      ((<|>))
 import           Control.Monad
 import           Control.Exception
-import           Data.ByteString.Builder  (lazyByteString)
+import           Data.ByteString.Builder  (Builder, lazyByteString, hPutBuilder)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Char
 import qualified Data.HashMap.Strict      as M
@@ -128,7 +128,7 @@ import qualified Data.Attoparsec.Text     as A
 import           Data.Attoparsec.Internal.Types (Parser)
 import           Text.PrettyPrint.HughesPJ (text)
 import           Language.Fixpoint.SortCheck
-import           Language.Fixpoint.Utils.Builder as Builder
+import           Language.Fixpoint.Utils.Builder as Builder hiding (Builder)
 -- import qualified Language.Fixpoint.Types as F
 -- import           Language.Fixpoint.Types.PrettyPrint (tracepp)
 import qualified SMTLIB.Backends as Bck
@@ -206,8 +206,8 @@ smtSetMbqi me = asyncCommand me SetMbqi
 
 smtWrite :: Context -> Command -> IO ()
 smtWrite me !s = do
-  let cmdText = ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 env s))
-  smtWriteRaw me cmdText $ case s of
+  let cmdBuilder = lazyByteString $ LTE.encodeUtf8 ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 env s))
+  smtWriteRaw me cmdBuilder $ case s of
     CheckSat -> True
     GetValue _ -> True
     _ -> False
@@ -269,13 +269,13 @@ negativeP
        return $ "(" <> v <> ")"
 
 -- | Writes a line of input for the SMT solver and to the log if there is one.
-smtWriteRaw :: Context -> Raw -> Bool -> IO ()
+smtWriteRaw :: Context -> Builder -> Bool -> IO ()
 smtWriteRaw me !s expectResponse = {- SCC "smtWriteRaw" -} do
   -- whenLoud $ do LTIO.appendFile debugFile (s <> "\n")
   --               LTIO.putStrLn ("CMD-RAW:" <> s <> ":CMD-RAW:DONE")
-  maybe (return ()) (`LTIO.hPutStrLn` s) (ctxLog me)
+  maybe (return ()) (\hLog -> hPutBuilder hLog s >> hFlush hLog) (ctxLog me)
   -- TODO don't rely on Text
-  let sendWith sender = sender (ctxSolver me) $ lazyByteString $ LTE.encodeUtf8 s
+  let sendWith sender = sender (ctxSolver me) s 
   -- LTIO.putStrLn $ "[send] " <> s
   if expectResponse
     then do
@@ -491,11 +491,14 @@ smtDefineFunc me name params rsort e =
 
 asyncCommand :: Context -> Command -> IO ()
 asyncCommand me@(Ctx {..}) cmd = do
-  -- let cmdText = ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 ctxSymEnv cmd))
+  let cmdBuilder = lazyByteString $ LTE.encodeUtf8 ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 ctxSymEnv cmd))
   -- LTIO.putStrLn $ "[async] [load] " <> cmdText
   let sendCmd = do
         -- LBS.putStrLn "[async] "
-        smtWrite me cmd
+        smtWriteRaw me cmdBuilder $ case cmd of
+          CheckSat -> True
+          GetValue _ -> True
+          _ -> False
   atomically $ modifyTVar ctxTVar $ Just . maybe sendCmd (>> sendCmd)
 
 smtAssertAsync :: Context -> Expr -> IO ()
