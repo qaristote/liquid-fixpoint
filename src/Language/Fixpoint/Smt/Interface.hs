@@ -108,6 +108,7 @@ import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Char
 import qualified Data.HashMap.Strict      as M
 import           Data.IORef              (newIORef, modifyIORef, readIORef, writeIORef)
+import           Data.Sequence           (ViewL(..), Seq(..), viewl)
 import           Data.Maybe              (fromMaybe)
 import qualified Data.Text                as T
 import qualified Data.Text.Encoding       as TE
@@ -279,18 +280,17 @@ smtWriteRaw me !s expectResponse = {- SCC "smtWriteRaw" -} do
       resp <-
         LBS.reverse . LBS.dropWhile isSpace . LBS.reverse
           <$> sendWith Bck.command
-      modifyIORef (ctxResp me) (<> (resp <> "\n"))
+      modifyIORef (ctxResp me) (:|> (resp <> "\n"))
     else do
       _ <- sendWith Bck.command_
       return ()
 
 -- | Reads a line of output from the SMT solver.
 smtReadRaw :: Context -> IO T.Text
-smtReadRaw me = do
-  resps <- readIORef $ ctxResp me
-  let (respLn, rest) = LBS.span (/= '\n') resps
-  writeIORef (ctxResp me) $ LBS.dropWhile isSpace rest
-  return $ TE.decodeUtf8With (const $ const $ Just ' ') $ LBS.toStrict respLn
+smtReadRaw Ctx {..} = do
+  (resp :< rest) <- viewl <$> readIORef ctxResp
+  writeIORef ctxResp rest
+  return $ TE.decodeUtf8With (const $ const $ Just ' ') $ LBS.toStrict resp
 {-# SCC smtReadRaw #-}
 
 --------------------------------------------------------------------------

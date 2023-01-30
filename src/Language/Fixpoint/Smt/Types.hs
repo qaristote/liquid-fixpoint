@@ -34,6 +34,7 @@ import           Language.Fixpoint.Utils.Builder (Builder)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.IORef
 import qualified Data.Text                as T
+import           Data.Sequence
 import           Text.PrettyPrint.HughesPJ
 import qualified SMTLIB.Backends as Bck
 import qualified SMTLIB.Backends.Process as Process
@@ -107,7 +108,7 @@ data Context = Ctx
   -- | The low-level handle for managing the SMT solver backend.
   , ctxHandle :: ContextHandle
   -- | A buffer holding the solver's responses.
-  , ctxResp :: IORef LBS.ByteString
+  , ctxResp :: IORef (Seq LBS.ByteString)
   , ctxLog     :: !(Maybe Handle)
   , ctxVerbose :: !Bool
   , ctxSymEnv  :: !SymEnv
