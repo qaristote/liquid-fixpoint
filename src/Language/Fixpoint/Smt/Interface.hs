@@ -19,23 +19,6 @@
 --   http://www.smt-lib.org/
 --   http://www.grammatech.com/resource/smt/SMTLIBTutorial.pdf
 
--- Note [Async SMT API]
---
--- The SMT solver is started in a separate process and liquid-fixpoint
--- communicates with it via pipes. This mechanism introduces some latency
--- since the queries need to reach the buffers in a separate process and
--- the OS has to switch contexts.
---
--- A remedy we currently try for this is to send multiple queries
--- together without waiting for the reply to each one, i.e. asynchronously.
--- We then collect the multiple answers after sending all of the queries.
---
--- The functions named @smt*Async@ implement this scheme.
---
--- An asynchronous thread is used to write the queries to prevent the
--- caller from blocking on IO, should the write buffer be full or should
--- an 'hFlush' call be necessary.
-
 module Language.Fixpoint.Smt.Interface (
 
     -- * Commands
@@ -71,12 +54,6 @@ module Language.Fixpoint.Smt.Interface (
     , smtBracket, smtBracketAt
     , smtDistinct
     , smtPush, smtPop
-    , smtAssertAsync
-    , smtCheckUnsatAsync
-    , readCheckUnsat
-    , smtBracketAsyncAt
-    , smtPushAsync
-    , smtPopAsync
 
     -- * Check Validity
     , checkValid
@@ -198,10 +175,10 @@ command me !cmd       = say >> hear cmd
     hear _            = return Ok
 
 smtExit :: Context -> IO ()
-smtExit me = asyncCommand me Exit
+smtExit me = interact' me Exit
 
 smtSetMbqi :: Context -> IO ()
-smtSetMbqi me = asyncCommand me SetMbqi
+smtSetMbqi me = interact' me SetMbqi
 
 smtWrite :: Context -> Command -> IO ()
 smtWrite me !s = do
@@ -469,41 +446,6 @@ smtDefineFunc me name params rsort e =
           e
 
 -----------------------------------------------------------------
--- Async calls to the smt
---
--- See Note [Async SMT API]
--- deprecated, equivalent to 'command'
------------------------------------------------------------------
-
-asyncCommand :: Context -> Command -> IO ()
-asyncCommand me cmd = do
-  smtWrite me cmd
-
-smtAssertAsync :: Context -> Expr -> IO ()
-smtAssertAsync me p  = asyncCommand me $ Assert Nothing p
-
-smtCheckUnsatAsync :: Context -> IO ()
-smtCheckUnsatAsync me = asyncCommand me CheckSat
-
-smtBracketAsyncAt :: SrcSpan -> Context -> String -> IO a -> IO a
-smtBracketAsyncAt sp x y z = smtBracketAsync x y z `catch` dieAt sp
-
-smtBracketAsync :: Context -> String -> IO a -> IO a
-smtBracketAsync me _msg a   = do
-  smtPushAsync me
-  r <- a
-  smtPopAsync me
-  return r
-
-smtPushAsync, smtPopAsync   :: Context -> IO ()
-smtPushAsync me = asyncCommand me Push
-smtPopAsync me = asyncCommand me Pop
-
------------------------------------------------------------------
-
-{-# SCC readCheckUnsat #-}
-readCheckUnsat :: Context -> IO Bool
-readCheckUnsat me = respSat <$> smtRead me
 
 smtAssertAxiom :: Context -> Triggered Expr -> IO ()
 smtAssertAxiom me p  = interact' me (AssertAx p)
