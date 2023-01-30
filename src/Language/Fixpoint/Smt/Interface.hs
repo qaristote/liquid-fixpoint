@@ -83,8 +83,6 @@ import           Data.ByteString.Builder  (lazyByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Char
 import qualified Data.HashMap.Strict      as M
-import           Data.IORef              (newIORef, modifyIORef, readIORef, writeIORef)
-import           Data.Sequence           (ViewL(..), Seq(..), viewl)
 import           Data.Maybe              (fromMaybe)
 import qualified Data.Text                as T
 import qualified Data.Text.Encoding       as TE
@@ -165,40 +163,40 @@ checkValids cfg f xts ps
 {-# SCC command #-}
 command              :: Context -> Command -> IO Response
 --------------------------------------------------------------------------------
-command me !cmd       = say >> hear cmd
+command Ctx {..} !cmd       = do
+  -- whenLoud $ do LTIO.appendFile debugFile (s <> "\n")
+  --               LTIO.putStrLn ("CMD-RAW:" <> s <> ":CMD-RAW:DONE")
+  maybe (return ()) (`LTIO.hPutStrLn` cmdTxt) ctxLog
+  case cmd of
+    CheckSat   -> commandRaw
+    GetValue _ -> commandRaw
+    _          -> commandRaw_ >> return Ok
   where
-    -- TODO don't split IO into smtWrite and smtRead
-    say               = smtWrite me cmd
-    hear CheckSat     = smtRead me
-    hear (GetValue _) = smtRead me
-    hear _            = return Ok
+    commandRaw_     = sendWith Bck.command_
+    commandRaw      = do
+      resp <- sendWith Bck.command
+      let respTxt = TE.decodeUtf8With (const $ const $ Just ' ') $ LBS.toStrict $ 
+                    LBS.reverse $ LBS.dropWhile isSpace $ LBS.reverse
+                    resp
+      parse respTxt
+    sendWith sender = sender ctxSolver $ lazyByteString $ LTE.encodeUtf8 cmdTxt
+    -- TODO don't rely on Text
+    cmdTxt          =
+      {-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 ctxSymEnv cmd)
+    parse resp      = do
+      -- TODO change interface of parser now that the response needn't be read
+      -- line-by-line
+      res <- A.parseWith (return "") responseP resp
+      case A.eitherResult res of
+        Left e  -> Misc.errorstar $ "SMTREAD:" ++ e
+        Right r -> do
+          maybe (return ()) (flip LTIO.hPutStrLn $ blt ("; SMT Says: " <> bShow r))
+            ctxLog
+          when ctxVerbose $ LTIO.putStrLn $ blt ("SMT Says: " <> bShow r)
+          return r
 
 smtSetMbqi :: Context -> IO ()
 smtSetMbqi me = interact' me SetMbqi
-
-smtWrite :: Context -> Command -> IO ()
-smtWrite me !s = do
-  let cmdText = ({-# SCC "Command-runSmt2" #-} Builder.toLazyText (runSmt2 env s))
-  smtWriteRaw me cmdText $ case s of
-    CheckSat -> True
-    GetValue _ -> True
-    _ -> False
-  where
-    env = ctxSymEnv me
-
-smtRead :: Context -> IO Response
-smtRead me = {- SCC "smtRead" -} do
-  when (ctxVerbose me) $ LTIO.putStrLn "SMT READ"
-  ln  <- smtReadRaw me
-  res <- A.parseWith (smtReadRaw me) responseP ln
-  case A.eitherResult res of
-    Left e  -> Misc.errorstar $ "SMTREAD:" ++ e
-    Right r -> do
-      maybe (return ()) (\h -> LTIO.hPutStrLn h $ blt ("; SMT Says: " <> bShow r)) (ctxLog me)
-      when (ctxVerbose me) $ LTIO.putStrLn $ blt ("SMT Says: " <> bShow r)
-      return r
-
-
 
 type SmtParser a = Parser T.Text a
 
@@ -239,32 +237,6 @@ negativeP :: SmtParser T.Text
 negativeP
   = do v <- A.char '(' *> A.takeWhile1 (/=')') <* A.char ')'
        return $ "(" <> v <> ")"
-
--- | Writes a line of input for the SMT solver and to the log if there is one.
-smtWriteRaw :: Context -> Raw -> Bool -> IO ()
-smtWriteRaw me !s expectResponse = {- SCC "smtWriteRaw" -} do
-  -- whenLoud $ do LTIO.appendFile debugFile (s <> "\n")
-  --               LTIO.putStrLn ("CMD-RAW:" <> s <> ":CMD-RAW:DONE")
-  maybe (return ()) (`LTIO.hPutStrLn` s) (ctxLog me)
-  -- TODO don't rely on Text
-  let sendWith sender = sender (ctxSolver me) $ lazyByteString $ LTE.encodeUtf8 s
-  if expectResponse
-    then do
-      resp <-
-        LBS.reverse . LBS.dropWhile isSpace . LBS.reverse
-          <$> sendWith Bck.command
-      modifyIORef (ctxResp me) (:|> (resp <> "\n"))
-    else do
-      _ <- sendWith Bck.command_
-      return ()
-
--- | Reads a line of output from the SMT solver.
-smtReadRaw :: Context -> IO T.Text
-smtReadRaw Ctx {..} = do
-  (resp :< rest) <- viewl <$> readIORef ctxResp
-  writeIORef ctxResp rest
-  return $ TE.decodeUtf8With (const $ const $ Just ' ') $ LBS.toStrict resp
-{-# SCC smtReadRaw #-}
 
 --------------------------------------------------------------------------
 -- | SMT Context ---------------------------------------------------------
@@ -335,10 +307,8 @@ makeContext' cfg ctxLog
                       Process.Config "cvc4" ["--incremental", "-L", "smtlib2"]
        solver            <- Bck.initSolver Bck.Queuing backend
        loud              <- isLoud
-       resp              <- newIORef mempty
        return Ctx { ctxSolver  = solver
                   , ctxHandle  = handle
-                  , ctxResp    = resp
                   , ctxLog     = ctxLog
                   , ctxVerbose = loud
                   , ctxSymEnv  = mempty
