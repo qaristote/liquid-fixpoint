@@ -39,7 +39,6 @@ module Language.Fixpoint.Smt.Interface (
 
     -- * Execute Queries
     , command
-    , smtExit
     , smtSetMbqi
 
     -- * Query API
@@ -173,9 +172,6 @@ command me !cmd       = say >> hear cmd
     hear CheckSat     = smtRead me
     hear (GetValue _) = smtRead me
     hear _            = return Ok
-
-smtExit :: Context -> IO ()
-smtExit me = interact' me Exit
 
 smtSetMbqi :: Context -> IO ()
 smtSetMbqi me = interact' me SetMbqi
